@@ -1,5 +1,11 @@
 # 企业微信智能机器人 Python SDK
 
+[![PyPI version](https://badge.fury.io/py/wecom-aibot-sdk-python.svg)](https://badge.fury.io/py/wecom-aibot-sdk-python)
+[![Python](https://img.shields.io/pypi/pyversions/wecom-aibot-sdk-python.svg)](https://pypi.org/project/wecom-aibot-sdk-python/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[English](../README.md)
+
 基于 WebSocket 长连接通道，提供消息收发、流式回复、模板卡片、事件回调、文件下载解密等核心能力。
 
 ## 功能特性
@@ -20,7 +26,7 @@
 ## 安装
 
 ```bash
-pip install wecom-aibot-sdk
+pip install wecom-aibot-sdk-python
 ```
 
 ## 快速开始

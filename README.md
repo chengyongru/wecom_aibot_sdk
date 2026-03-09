@@ -1,5 +1,11 @@
 # WeCom AI Bot Python SDK
 
+[![PyPI version](https://badge.fury.io/py/wecom-aibot-sdk-python.svg)](https://badge.fury.io/py/wecom-aibot-sdk-python)
+[![Python](https://img.shields.io/pypi/pyversions/wecom-aibot-sdk-python.svg)](https://pypi.org/project/wecom-aibot-sdk-python/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[简体中文](./docs/README_zh.md)
+
 Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, providing message sending/receiving, streaming replies, template cards, event callbacks, file download/decryption and other core capabilities.
 
 ## Features
@@ -20,7 +26,7 @@ Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, provid
 ## Installation
 
 ```bash
-pip install wecom-aibot-sdk
+pip install wecom-aibot-sdk-python
 ```
 
 ## Quick Start
