@@ -20,8 +20,8 @@
 - **主动推送** - 主动向指定会话发送 Markdown 或模板卡片消息
 - **事件回调** - 支持 enter_chat、template_card_event、feedback_event
 - **串行回复队列** - 相同 req_id 的回复串行发送，自动等待回执
-- **文件下载解密** - 内置 AES-256-CBC 文件解密，每条图片/文件消息有独立 aeskey
-- **可插拔日志** - 支持自定义 Logger，内置带时间戳的 DefaultLogger
+- **文件下载解密** - 内置 AES-256-CBC 文件解密，支持 RFC 5987 文件名编码
+- **可插拔日志** - 使用 Python 内置 `logging` 模块，默认 WARNING 级别
 
 ## 安装
 
@@ -107,7 +107,7 @@ client = WSClient({
 | `reply_stream_with_card(frame, stream_id, content, finish?, options?)` | 发送流式 + 卡片组合 | `None` |
 | `update_template_card(frame, template_card, userids?)` | 更新模板卡片（5 秒内） | `None` |
 | `send_message(chatid, body)` | 主动发送消息 | `None` |
-| `download_file(url, aes_key)` | 下载并解密文件 | `tuple[bytes, str?]` |
+| `download_file(url, aes_key?)` | 下载并可选解密文件 | `tuple[bytes, str?]` |
 
 #### 事件
 
@@ -128,6 +128,92 @@ client = WSClient({
 | `event.enter_chat` | `(frame)` | 用户进入会话 |
 | `event.template_card_event` | `(frame)` | 卡片按钮点击 |
 | `event.feedback_event` | `(frame)` | 用户反馈 |
+
+## 文件下载
+
+下载并解密消息中的文件（图片、文档）：
+
+```python
+import asyncio
+from wecom_aibot_sdk import WSClient
+
+async def main():
+    client = WSClient({
+        "bot_id": "your-bot-id",
+        "secret": "your-bot-secret",
+    })
+
+    # 处理文件消息
+    async def on_file(frame):
+        file_info = frame.body.get("file", {})
+        url = file_info.get("url", "")
+        aes_key = file_info.get("aeskey", "")
+
+        if url:
+            # 下载并解密（aes_key 可选）
+            buffer, filename = await client.download_file(url, aes_key)
+            print(f"已下载: {filename}, 大小: {len(buffer)} bytes")
+
+    client.on("message.file", on_file)
+
+    # 处理图片消息类似
+    async def on_image(frame):
+        image_info = frame.body.get("image", {})
+        url = image_info.get("url", "")
+        aes_key = image_info.get("aeskey", "")
+
+        if url and aes_key:
+            buffer, _ = await client.download_file(url, aes_key)
+            # buffer 包含解密后的图片数据
+
+    client.on("message.image", on_image)
+
+    await client.connect_async()
+    while client.is_connected:
+        await asyncio.sleep(1)
+
+asyncio.run(main())
+```
+
+## 日志配置
+
+SDK 使用 Python 内置的 `logging` 模块，默认日志级别为 `WARNING`。
+
+```python
+import logging
+from wecom_aibot_sdk import WSClient, WSClientOptions, DefaultLogger
+
+# 创建指定级别的日志
+logger = DefaultLogger(level=logging.DEBUG)
+
+# 或运行时更改级别
+logger.set_level(logging.INFO)
+
+# 传入客户端
+client = WSClient(WSClientOptions(
+    bot_id="your-bot-id",
+    secret="your-bot-secret",
+    logger=logger,
+))
+
+# 可用级别：
+# logging.DEBUG    - 所有日志
+# logging.INFO     - INFO + WARNING + ERROR
+# logging.WARNING  - WARNING + ERROR（默认）
+# logging.ERROR    - 仅 ERROR
+```
+
+你也可以实现 `Logger` 协议使用自定义日志：
+
+```python
+class MyLogger:
+    def debug(self, msg, *args): ...
+    def info(self, msg, *args): ...
+    def warn(self, msg, *args): ...
+    def error(self, msg, *args): ...
+
+client = WSClient({"bot_id": "...", "secret": "...", "logger": MyLogger()})
+```
 
 ## 项目结构
 

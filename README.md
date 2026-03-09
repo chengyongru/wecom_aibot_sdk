@@ -20,8 +20,8 @@ Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, provid
 - **Proactive Push** - Proactively send Markdown or template card messages to specified chats
 - **Event Callbacks** - Supports enter_chat, template_card_event, feedback_event
 - **Serial Reply Queue** - Replies with same req_id are sent serially, auto-waits for receipt
-- **File Download & Decryption** - Built-in AES-256-CBC file decryption, each image/file message has its own aeskey
-- **Pluggable Logging** - Supports custom Logger, includes DefaultLogger with timestamps
+- **File Download & Decryption** - Built-in AES-256-CBC file decryption, supports RFC 5987 filename encoding
+- **Pluggable Logging** - Uses Python's built-in `logging` module, defaults to WARNING level
 
 ## Installation
 
@@ -107,7 +107,7 @@ client = WSClient({
 | `reply_stream_with_card(frame, stream_id, content, finish?, options?)` | Send stream + card combo | `None` |
 | `update_template_card(frame, template_card, userids?)` | Update template card (within 5s) | `None` |
 | `send_message(chatid, body)` | Proactively send message | `None` |
-| `download_file(url, aes_key)` | Download and decrypt file | `tuple[bytes, str?]` |
+| `download_file(url, aes_key?)` | Download and optionally decrypt file | `tuple[bytes, str?]` |
 
 #### Events
 
@@ -128,6 +128,92 @@ client = WSClient({
 | `event.enter_chat` | `(frame)` | User entered chat |
 | `event.template_card_event` | `(frame)` | Card button clicked |
 | `event.feedback_event` | `(frame)` | User feedback |
+
+## File Download
+
+Download and decrypt files (images, documents) from messages:
+
+```python
+import asyncio
+from wecom_aibot_sdk import WSClient
+
+async def main():
+    client = WSClient({
+        "bot_id": "your-bot-id",
+        "secret": "your-bot-secret",
+    })
+
+    # Handle file messages
+    async def on_file(frame):
+        file_info = frame.body.get("file", {})
+        url = file_info.get("url", "")
+        aes_key = file_info.get("aeskey", "")
+
+        if url:
+            # Download and decrypt (aes_key is optional)
+            buffer, filename = await client.download_file(url, aes_key)
+            print(f"Downloaded: {filename}, size: {len(buffer)} bytes")
+
+    client.on("message.file", on_file)
+
+    # Handle image messages similarly
+    async def on_image(frame):
+        image_info = frame.body.get("image", {})
+        url = image_info.get("url", "")
+        aes_key = image_info.get("aeskey", "")
+
+        if url and aes_key:
+            buffer, _ = await client.download_file(url, aes_key)
+            # buffer contains decrypted image data
+
+    client.on("message.image", on_image)
+
+    await client.connect_async()
+    while client.is_connected:
+        await asyncio.sleep(1)
+
+asyncio.run(main())
+```
+
+## Logging
+
+The SDK uses Python's built-in `logging` module. Default log level is `WARNING`.
+
+```python
+import logging
+from wecom_aibot_sdk import WSClient, WSClientOptions, DefaultLogger
+
+# Create logger with custom level
+logger = DefaultLogger(level=logging.DEBUG)
+
+# Or change level at runtime
+logger.set_level(logging.INFO)
+
+# Pass to client
+client = WSClient(WSClientOptions(
+    bot_id="your-bot-id",
+    secret="your-bot-secret",
+    logger=logger,
+))
+
+# Available levels:
+# logging.DEBUG    - All messages
+# logging.INFO     - INFO + WARNING + ERROR
+# logging.WARNING  - WARNING + ERROR (default)
+# logging.ERROR    - ERROR only
+```
+
+You can also use your own logger by implementing the `Logger` protocol:
+
+```python
+class MyLogger:
+    def debug(self, msg, *args): ...
+    def info(self, msg, *args): ...
+    def warn(self, msg, *args): ...
+    def error(self, msg, *args): ...
+
+client = WSClient({"bot_id": "...", "secret": "...", "logger": MyLogger()})
+```
 
 ## Project Structure
 
