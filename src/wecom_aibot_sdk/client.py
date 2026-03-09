@@ -366,14 +366,15 @@ class WSClient:
     async def download_file(
         self,
         url: str,
-        aes_key: str,
+        aes_key: Optional[str] = None,
     ) -> tuple[bytes, Optional[str]]:
         """
-        Download and decrypt file using AES key
+        Download and optionally decrypt file using AES key
 
         Args:
             url: File URL
-            aes_key: AES key from message body (image.aeskey or file.aeskey)
+            aes_key: AES key from message body (image.aeskey or file.aeskey).
+                     If not provided, returns raw encrypted data.
 
         Returns:
             Tuple of (buffer, filename)

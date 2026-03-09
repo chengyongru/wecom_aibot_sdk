@@ -1,7 +1,7 @@
 """HTTP API client for file download"""
 
 import asyncio
-from typing import Tuple
+from typing import Optional, Tuple
 
 import aiohttp
 
@@ -30,17 +30,24 @@ class WeComApiClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def download_file(self, url: str, aes_key: str) -> Tuple[bytes, str | None]:
+    async def download_file(
+        self,
+        url: str,
+        aes_key: Optional[str] = None,
+    ) -> Tuple[bytes, Optional[str]]:
         """
-        Download and decrypt file
+        Download and optionally decrypt file
 
         Args:
             url: File URL
-            aes_key: AES key for decryption (Base64 encoded)
+            aes_key: AES key for decryption (Base64 encoded).
+                     If not provided, returns raw encrypted data.
 
         Returns:
-            Tuple of (decrypted buffer, filename)
+            Tuple of (buffer, filename)
         """
+        self._logger.info("Downloading file...")
+
         session = await self._get_session()
 
         async with session.get(url) as response:
@@ -51,9 +58,14 @@ class WeComApiClient:
             content_disposition = response.headers.get("Content-Disposition", "")
             filename = extract_filename(content_disposition) if content_disposition else None
 
+        # If no aes_key provided, return raw data
+        if not aes_key:
+            self._logger.warn("No aes_key provided, returning raw file data")
+            return encrypted_data, filename
+
         # Decrypt file
         decrypted_data = decrypt_file(encrypted_data, aes_key)
 
-        self._logger.debug(f"Downloaded and decrypted file: {filename}, size: {len(decrypted_data)} bytes")
+        self._logger.info(f"File downloaded and decrypted successfully: {filename}, size: {len(decrypted_data)} bytes")
 
         return decrypted_data, filename

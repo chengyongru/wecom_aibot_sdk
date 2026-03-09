@@ -152,10 +152,10 @@ class WebSocketManager:
                     await self._handle_disconnect("heartbeat_timeout")
                     break
 
-                # Send heartbeat
+                # Send heartbeat (use "ping" prefix to match official SDK)
                 heartbeat_frame = {
                     "cmd": CmdType.HEARTBEAT,
-                    "headers": {"req_id": f"hb_{int(time.time() * 1000)}"},
+                    "headers": {"req_id": f"ping_{int(time.time() * 1000)}"},
                 }
                 await self._send_raw(heartbeat_frame)
                 self._pending_acks += 1
