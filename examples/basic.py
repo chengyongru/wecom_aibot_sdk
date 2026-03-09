@@ -66,6 +66,26 @@ async def main():
 
     client.on("message.image", on_image_message)
 
+    # Handle file messages
+    async def on_file_message(frame):
+        body = frame.body
+        file_info = body.get("file", {})
+        url = file_info.get("url", "")
+        aeskey = file_info.get("aeskey", "")
+
+        if url and aeskey:
+            print(f"Received file, downloading...")
+            print(f"aeskey length: {len(aeskey)}")
+            try:
+                buffer, filename = await client.download_file(url, aeskey)
+                print(f"Downloaded file: {filename}, size: {len(buffer)} bytes")
+            except Exception as e:
+                print(f"Error downloading file: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+
+    client.on("message.file", on_file_message)
+
     # Handle errors
     async def on_error(frame):
         print(f"Error: {frame.body}")
