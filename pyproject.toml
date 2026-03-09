@@ -1,6 +1,6 @@
 [project]
 name = "wecom-aibot-sdk-python"
-version = "0.1.0"
+version = "0.1.1"
 description = "WeCom AI Bot Python SDK - Based on WebSocket long connection, provides core capabilities including message sending/receiving, streaming replies, template cards, event callbacks, and file download decryption"
 readme = "README.md"
 requires-python = ">=3.10"
