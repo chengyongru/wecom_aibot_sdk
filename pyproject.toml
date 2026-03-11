@@ -4,6 +4,7 @@ version = "0.1.2"
 description = "WeCom AI Bot Python SDK - Based on WebSocket long connection, provides core capabilities including message sending/receiving, streaming replies, template cards, event callbacks, and file download decryption"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 dependencies = [
     "aiohttp>=3.9.0",
     "websockets>=12.0",
