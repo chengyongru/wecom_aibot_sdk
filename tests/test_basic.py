@@ -1,6 +1,7 @@
 """Basic tests for WeCom AI Bot SDK"""
 
 import asyncio
+import logging
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,30 +22,34 @@ class TestGenerateReqId:
 
 
 class TestDefaultLogger:
-    def test_debug(self, capsys):
-        logger = DefaultLogger()
+    def test_debug(self, caplog):
+        """Test debug logging with DEBUG level"""
+        logger = DefaultLogger(level=logging.DEBUG)
         logger.debug("test message %s", "arg")
-        captured = capsys.readouterr()
-        assert "[DEBUG]" in captured.out
-        assert "test message arg" in captured.out
+        # caplog captures logging output
+        assert "DEBUG" in caplog.text
+        assert "test message arg" in caplog.text
 
-    def test_info(self, capsys):
-        logger = DefaultLogger()
+    def test_info(self, caplog):
+        """Test info logging with INFO level"""
+        logger = DefaultLogger(level=logging.INFO)
         logger.info("info test")
-        captured = capsys.readouterr()
-        assert "[INFO]" in captured.out
+        assert "INFO" in caplog.text
+        assert "info test" in caplog.text
 
-    def test_warn(self, capsys):
+    def test_warn(self, caplog):
+        """Test warn logging (default level WARNING)"""
         logger = DefaultLogger()
         logger.warn("warning test")
-        captured = capsys.readouterr()
-        assert "[WARN]" in captured.out
+        assert "WARNING" in caplog.text
+        assert "warning test" in caplog.text
 
-    def test_error(self, capsys):
+    def test_error(self, caplog):
+        """Test error logging (default level includes ERROR)"""
         logger = DefaultLogger()
         logger.error("error test")
-        captured = capsys.readouterr()
-        assert "[ERROR]" in captured.out
+        assert "ERROR" in caplog.text
+        assert "error test" in caplog.text
 
 
 class TestWSClient:
@@ -106,24 +111,29 @@ class TestWsFrame:
 
 class TestCrypto:
     def test_decrypt_file(self):
+        """Test AES-256-CBC file decryption with 32-byte PKCS#7 padding"""
         from wecom_aibot_sdk.crypto import decrypt_file
         import base64
         from Crypto.Cipher import AES
-        from Crypto.Util.Padding import pad
 
         # Test data
         key = b"A" * 32  # 32 bytes for AES-256
-        iv = b"B" * 16
+        iv = key[:16]  # IV is first 16 bytes of key (WeCom convention)
         plaintext = b"Hello, World!"
+
+        # Manual PKCS#7 padding to 32-byte boundary (WeCom specification)
+        pad_len = 32 - (len(plaintext) % 32)
+        padded_plaintext = plaintext + bytes([pad_len] * pad_len)
 
         # Encrypt
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
-        encrypted_data = iv + ciphertext
+        ciphertext = cipher.encrypt(padded_plaintext)
+        # WeCom API returns base64 encoded ciphertext (IV is derived from key, not prepended)
+        encrypted_data_b64 = base64.b64encode(ciphertext).decode()
 
         # Decrypt using our function
         aes_key_b64 = base64.b64encode(key).decode()
-        decrypted = decrypt_file(encrypted_data, aes_key_b64)
+        decrypted = decrypt_file(encrypted_data_b64, aes_key_b64)
 
         assert decrypted == plaintext
 

@@ -7,12 +7,12 @@ from urllib.parse import unquote
 from Crypto.Cipher import AES
 
 
-def decrypt_file(encrypted_data: bytes, aes_key: str) -> bytes:
+def decrypt_file(encrypted_data: bytes | str, aes_key: str) -> bytes:
     """
     Decrypt file using AES-256-CBC
 
     Args:
-        encrypted_data: Encrypted file data
+        encrypted_data: Encrypted file data (can be bytes or base64 encoded string)
         aes_key: AES key (Base64 encoded)
 
     Returns:
@@ -22,13 +22,22 @@ def decrypt_file(encrypted_data: bytes, aes_key: str) -> bytes:
         ValueError: If parameters are invalid or decryption fails
     """
     # Parameter validation (consistent with official Node.js SDK)
-    if not encrypted_data or len(encrypted_data) == 0:
+    if not encrypted_data:
         raise ValueError("decrypt_file: encrypted_data is empty or not provided")
 
     if not aes_key or not isinstance(aes_key, str):
         raise ValueError("decrypt_file: aes_key must be a non-empty string")
 
     try:
+        # Handle both bytes and base64 string input
+        if isinstance(encrypted_data, bytes):
+            raw_encrypted_data = encrypted_data
+        elif isinstance(encrypted_data, str):
+            # WeCom API returns base64 encoded data
+            raw_encrypted_data = base64.b64decode(encrypted_data)
+        else:
+            raise ValueError("decrypt_file: encrypted_data must be bytes or str")
+
         # Base64 decode the key (add padding if needed)
         padding_needed = 4 - (len(aes_key) % 4)
         if padding_needed != 4:
@@ -40,7 +49,7 @@ def decrypt_file(encrypted_data: bytes, aes_key: str) -> bytes:
 
         # AES-256-CBC decryption
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        decrypted = cipher.decrypt(encrypted_data)
+        decrypted = cipher.decrypt(raw_encrypted_data)
 
         # Manual PKCS#7 unpadding (supports 32-byte block as per WeCom docs)
         # WeCom uses PKCS#7 padding to 32-byte boundary, not standard 16-byte

@@ -36,7 +36,8 @@ class WebSocketManager:
         self._reconnect_attempts = 0
         self._heartbeat_task: asyncio.Task | None = None
         self._receive_task: asyncio.Task | None = None
-        self._pending_acks = 0
+        self._missed_pong_count = 0  # Consecutive missed pong count (official SDK naming)
+        self._max_missed_pong = 2  # Max allowed consecutive missed pongs
         self._reply_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._reply_tasks: dict[str, asyncio.Task] = {}
         self._stop_event = asyncio.Event()
@@ -102,14 +103,16 @@ class WebSocketManager:
         self._connected = False
         self._authenticated = False
 
-        # Cancel background tasks
+        # Stop heartbeat task
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             try:
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+            self._heartbeat_task = None
 
+        # Stop receive task
         if self._receive_task:
             self._receive_task.cancel()
             try:
@@ -131,12 +134,23 @@ class WebSocketManager:
         await self._message_handler.dispatch("disconnected", WsFrame(headers={"req_id": ""}, body="manual_disconnect"))
 
     def _start_background_tasks(self) -> None:
-        """Start heartbeat and receive tasks"""
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        """Start receive task (heartbeat starts after authentication)"""
         self._receive_task = asyncio.create_task(self._receive_loop())
 
+    def _start_heartbeat(self) -> None:
+        """Start heartbeat task (called after successful authentication)"""
+        self._stop_heartbeat()
+        self._missed_pong_count = 0
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    def _stop_heartbeat(self) -> None:
+        """Stop heartbeat task"""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
     async def _heartbeat_loop(self) -> None:
-        """Heartbeat loop"""
+        """Heartbeat loop - aligned with official Node.js SDK implementation"""
         interval = self._options.heartbeat_interval / 1000
 
         while not self._stop_event.is_set() and self._connected:
@@ -146,20 +160,24 @@ class WebSocketManager:
                 if not self._connected or not self._ws:
                     break
 
-                # Check for missing ACKs
-                if self._pending_acks > 3:
-                    self._logger.warn("Too many missing ACKs, reconnecting...")
+                # Check for missing ACKs BEFORE sending (official SDK behavior)
+                if self._missed_pong_count >= self._max_missed_pong:
+                    self._logger.warn(
+                        f"No heartbeat ack received for {self._missed_pong_count} consecutive pings"
+                    )
                     await self._handle_disconnect("heartbeat_timeout")
                     break
 
-                # Send heartbeat (use "ping" prefix to match official SDK)
+                # Send heartbeat
+                self._missed_pong_count += 1
                 heartbeat_frame = {
                     "cmd": CmdType.HEARTBEAT,
                     "headers": {"req_id": f"ping_{int(time.time() * 1000)}"},
                 }
                 await self._send_raw(heartbeat_frame)
-                self._pending_acks += 1
-                self._logger.debug("Heartbeat sent, pending ACKs: %d", self._pending_acks)
+                self._logger.debug(
+                    "Heartbeat sent, missed pong count: %d", self._missed_pong_count
+                )
 
             except asyncio.CancelledError:
                 break
@@ -190,10 +208,9 @@ class WebSocketManager:
                 # Debug: log raw received data
                 self._logger.debug(f"Received: {data}")
 
-                # Handle ACK
+                # Handle generic ACK (not heartbeat related)
                 if data.get("cmd") == "ack":
-                    self._pending_acks = max(0, self._pending_acks - 1)
-                    self._logger.debug("ACK received, pending ACKs: %d", self._pending_acks)
+                    self._logger.debug("Generic ACK received")
                     continue
 
                 # Handle auth response (no cmd, check req_id prefix)
@@ -203,16 +220,20 @@ class WebSocketManager:
                         self._authenticated = True
                         self._reconnect_attempts = 0
                         self._logger.info("Authenticated successfully")
+                        # Start heartbeat after successful authentication (official SDK behavior)
+                        self._start_heartbeat()
                         await self._message_handler.dispatch("authenticated", WsFrame(headers={"req_id": ""}))
                     else:
                         self._logger.error(f"Authentication failed: {data.get('errmsg')}")
                     continue
 
-                # Handle heartbeat response (no cmd, check req_id prefix)
+                # Handle heartbeat response (reset counter on success)
                 if req_id.startswith("ping"):
                     if data.get("errcode") == 0:
-                        self._pending_acks = max(0, self._pending_acks - 1)
-                        self._logger.debug("Heartbeat ack received")
+                        self._missed_pong_count = 0  # Reset to 0 on successful pong (official SDK behavior)
+                        self._logger.debug("Heartbeat ack received, reset missed pong count")
+                    else:
+                        self._logger.warn(f"Heartbeat ack error: {data.get('errmsg')}")
                     continue
 
                 # Parse and handle frame
