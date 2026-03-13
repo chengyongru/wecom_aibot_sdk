@@ -250,6 +250,7 @@ class WebSocketManager:
                 self._logger.error(f"Receive error: {e}")
                 frame = WsFrame(headers={"req_id": ""}, body={"error": str(e)})
                 await self._message_handler.dispatch("error", frame)
+                break  # Exit loop to avoid conflict with potential reconnect
 
     async def _handle_disconnect(self, reason: str) -> None:
         """Handle disconnection and trigger reconnect"""
