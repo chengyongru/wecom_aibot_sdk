@@ -76,7 +76,8 @@ class MessageHandler:
         if msgtype == "event":
             # Handle event message
             event = body.get("event", {})
-            event_type = event.get("event_type") if isinstance(event, dict) else None
+            # Support both eventtype (official API) and event_type (legacy)
+            event_type = (event.get("eventtype") or event.get("event_type")) if isinstance(event, dict) else None
 
             # Dispatch general event
             await self.dispatch("event", frame)

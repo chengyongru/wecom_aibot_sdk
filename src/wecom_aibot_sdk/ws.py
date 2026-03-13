@@ -41,6 +41,7 @@ class WebSocketManager:
         self._reply_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._reply_tasks: dict[str, asyncio.Task] = {}
         self._stop_event = asyncio.Event()
+        self._kicked_by_new_connection = False  # Flag for disconnected_event
 
     @property
     def is_connected(self) -> bool:
@@ -52,10 +53,33 @@ class WebSocketManager:
         if self._stop_event.is_set():
             self._stop_event.clear()
 
+        # Reset kicked flag when manually connecting
+        self._kicked_by_new_connection = False
+
         await self._do_connect()
 
     async def _do_connect(self) -> None:
         """Perform WebSocket connection"""
+        # Reset kicked flag (for reconnect scenarios)
+        self._kicked_by_new_connection = False
+
+        # Stop old receive task first to prevent duplicate recv loops
+        if self._receive_task and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+            self._receive_task = None
+
+        # Close old WebSocket connection if exists
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception as e:
+                self._logger.debug(f"Error closing old WebSocket: {e}")
+            self._ws = None
+
         ws_url = self._options.ws_url or self.DEFAULT_WS_URL
 
         try:
@@ -135,13 +159,17 @@ class WebSocketManager:
 
     def _start_background_tasks(self) -> None:
         """Start receive task (heartbeat starts after authentication)"""
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        # Only create new task if not already running
+        if self._receive_task is None or self._receive_task.done():
+            self._receive_task = asyncio.create_task(self._receive_loop())
 
     def _start_heartbeat(self) -> None:
         """Start heartbeat task (called after successful authentication)"""
         self._stop_heartbeat()
         self._missed_pong_count = 0
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # Only create new task if not already running
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     def _stop_heartbeat(self) -> None:
         """Stop heartbeat task"""
@@ -236,6 +264,21 @@ class WebSocketManager:
                         self._logger.warn(f"Heartbeat ack error: {data.get('errmsg')}")
                     continue
 
+                # Handle disconnected_event (kicked by new connection)
+                # This is sent via aibot_event_callback before server closes connection
+                body = data.get("body", {})
+                if body.get("msgtype") == "event":
+                    event = body.get("event", {})
+                    # Support both eventtype (official) and event_type (legacy)
+                    event_type = event.get("eventtype") or event.get("event_type")
+                    if event_type == "disconnected_event":
+                        self._logger.warn("Received disconnected_event, kicked by new connection")
+                        self._kicked_by_new_connection = True
+                        # Still dispatch the event for user handlers
+                        frame = self._message_handler.parse_frame(data)
+                        await self._message_handler.handle_frame(frame)
+                        continue
+
                 # Parse and handle frame
                 frame = self._message_handler.parse_frame(data)
                 await self._message_handler.handle_frame(frame)
@@ -258,6 +301,11 @@ class WebSocketManager:
         self._authenticated = False
 
         await self._message_handler.dispatch("disconnected", WsFrame(headers={"req_id": ""}, body=reason))
+
+        # Don't reconnect if kicked by new connection (disconnected_event)
+        if self._kicked_by_new_connection:
+            self._logger.info("Disconnected by new connection, not reconnecting")
+            return
 
         # Attempt reconnect
         await self._reconnect()
