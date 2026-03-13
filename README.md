@@ -128,6 +128,7 @@ client = WSClient({
 | `event.enter_chat` | `(frame)` | 用户进入会话 |
 | `event.template_card_event` | `(frame)` | 卡片按钮点击 |
 | `event.feedback_event` | `(frame)` | 用户反馈 |
+| `event.disconnected_event` | `(frame)` | 被新连接踢出（不会自动重连） |
 
 ## 文件下载
 

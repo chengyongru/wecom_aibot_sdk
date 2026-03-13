@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wecom_aibot_sdk import WSClient, generate_req_id, DefaultLogger
-from wecom_aibot_sdk.types import WsFrame, WSClientOptions
+from wecom_aibot_sdk.types import WsFrame, WSClientOptions, WSClientOptions as WSOptions
 
 
 class TestGenerateReqId:
@@ -187,3 +187,167 @@ class TestMessageHandler:
         await handler.handle_frame(frame)
 
         assert len(received) == 1
+
+
+class TestEventTypeCompatibility:
+    """Test event type field name compatibility (eventtype vs event_type)"""
+
+    @pytest.mark.asyncio
+    async def test_eventtype_field(self):
+        """Test event handling with official 'eventtype' field"""
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        handler = MessageHandler()
+        received = []
+
+        async def on_enter(frame):
+            received.append(frame)
+
+        handler.on("event.enter_chat", on_enter)
+
+        frame = WsFrame(
+            headers={"req_id": "test"},
+            body={
+                "msgtype": "event",
+                "event": {"eventtype": "enter_chat"}
+            }
+        )
+        await handler.handle_frame(frame)
+
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_event_type_field(self):
+        """Test event handling with legacy 'event_type' field"""
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        handler = MessageHandler()
+        received = []
+
+        async def on_enter(frame):
+            received.append(frame)
+
+        handler.on("event.enter_chat", on_enter)
+
+        frame = WsFrame(
+            headers={"req_id": "test"},
+            body={
+                "msgtype": "event",
+                "event": {"event_type": "enter_chat"}
+            }
+        )
+        await handler.handle_frame(frame)
+
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_disconnected_event(self):
+        """Test disconnected_event handling"""
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        handler = MessageHandler()
+        received = []
+
+        async def on_disconnected(frame):
+            received.append(frame)
+
+        handler.on("event.disconnected_event", on_disconnected)
+
+        frame = WsFrame(
+            headers={"req_id": "test"},
+            body={
+                "msgtype": "event",
+                "event": {"eventtype": "disconnected_event"}
+            }
+        )
+        await handler.handle_frame(frame)
+
+        assert len(received) == 1
+
+
+class TestWebSocketManager:
+    """Test WebSocketManager reconnection behavior"""
+
+    @pytest.mark.asyncio
+    async def test_kicked_flag_prevents_reconnect(self):
+        """Test that _kicked_by_new_connection flag prevents auto-reconnect"""
+        from wecom_aibot_sdk.ws import WebSocketManager
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        options = WSOptions(
+            bot_id="test",
+            secret="test",
+            max_reconnect_attempts=3,
+        )
+        handler = MessageHandler()
+        manager = WebSocketManager(options, handler)
+
+        # Set the kicked flag
+        manager._kicked_by_new_connection = True
+        manager._connected = False
+
+        # Call _handle_disconnect - should NOT trigger reconnect
+        await manager._handle_disconnect("test_disconnect")
+
+        # Verify reconnect was NOT attempted
+        assert manager._reconnect_attempts == 0
+
+    @pytest.mark.asyncio
+    async def test_kicked_flag_reset_on_connect(self):
+        """Test that _kicked_by_new_connection flag is reset on connect"""
+        from wecom_aibot_sdk.ws import WebSocketManager
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        options = WSOptions(
+            bot_id="test",
+            secret="test",
+        )
+        handler = MessageHandler()
+        manager = WebSocketManager(options, handler)
+
+        # Set the kicked flag
+        manager._kicked_by_new_connection = True
+
+        # Reset flag via connect method
+        manager._stop_event.set()
+        await manager.connect()
+
+        # Verify flag was reset
+        assert manager._kicked_by_new_connection == False
+
+    @pytest.mark.asyncio
+    async def test_receive_loop_cancellation(self):
+        """Test that old receive task is cancelled before creating new one"""
+        from wecom_aibot_sdk.ws import WebSocketManager
+        from wecom_aibot_sdk.message_handler import MessageHandler
+
+        options = WSOptions(
+            bot_id="test",
+            secret="test",
+        )
+        handler = MessageHandler()
+        manager = WebSocketManager(options, handler)
+
+        # Create a fake running task
+        async def fake_loop():
+            await asyncio.sleep(10)
+
+        manager._receive_task = asyncio.create_task(fake_loop())
+
+        # Mock websockets.connect and _authenticate
+        mock_ws = MagicMock()
+        mock_ws.state = MagicMock()
+        mock_ws.state.name = "OPEN"
+
+        with patch('wecom_aibot_sdk.ws.websockets.connect', new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = mock_ws
+
+            with patch.object(manager, '_authenticate', new_callable=AsyncMock):
+                with patch.object(manager, '_start_background_tasks'):
+                    try:
+                        await manager._do_connect()
+                    except Exception:
+                        pass
+
+        # Verify old task was cancelled (either done or None)
+        assert manager._receive_task is None or manager._receive_task.done()
