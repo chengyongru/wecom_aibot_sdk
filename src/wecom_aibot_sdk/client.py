@@ -64,6 +64,11 @@ class WSClient:
         return self._ws_manager.is_connected
 
     @property
+    def is_authenticated(self) -> bool:
+        """Check if WebSocket is authenticated"""
+        return self._ws_manager._authenticated
+
+    @property
     def api(self) -> WeComApiClient:
         """Get internal API client instance"""
         return self._api_client
