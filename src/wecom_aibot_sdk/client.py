@@ -111,8 +111,8 @@ class WSClient:
         self,
         frame: Union[WsFrame, WsFrameHeaders],
         body: dict[str, Any],
-        cmd: str = "reply",
-    ) -> None:
+        cmd: str = "aibot_respond_msg",
+    ) -> WsFrame:
         """
         Send reply message through WebSocket (generic method)
 
@@ -120,6 +120,9 @@ class WSClient:
             frame: Original frame (for req_id), can be WsFrame or just headers
             body: Message body
             cmd: Command type
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -127,7 +130,7 @@ class WSClient:
             headers = frame.headers
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, cmd)
+        return await self._ws_manager.send(ws_frame, body, cmd)
 
     async def reply_stream(
         self,
@@ -137,7 +140,7 @@ class WSClient:
         finish: bool = False,
         msg_item: Optional[list[ReplyMsgItem]] = None,
         feedback: Optional[ReplyFeedback] = None,
-    ) -> None:
+    ) -> WsFrame:
         """
         Send streaming text reply (supports Markdown)
 
@@ -148,6 +151,9 @@ class WSClient:
             finish: Whether to end stream, default False
             msg_item: Mixed content items (only valid when finish=True)
             feedback: Feedback info (only set on first reply)
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -184,19 +190,22 @@ class WSClient:
                 body["stream"]["feedback"] = feedback_data
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, "aibot_respond_msg")
+        return await self._ws_manager.send(ws_frame, body, "aibot_respond_msg")
 
     async def reply_welcome(
         self,
         frame: Union[WsFrame, WsFrameHeaders],
         body: dict[str, Any],
-    ) -> None:
+    ) -> WsFrame:
         """
         Send welcome reply (must be called within 5s of receiving enter_chat event)
 
         Args:
             frame: Original frame
             body: Message body (text or template_card)
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -204,14 +213,14 @@ class WSClient:
             headers = frame.headers
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, "reply_welcome")
+        return await self._ws_manager.send(ws_frame, body, "aibot_respond_welcome_msg")
 
     async def reply_template_card(
         self,
         frame: Union[WsFrame, WsFrameHeaders],
         template_card: TemplateCard,
         feedback: Optional[ReplyFeedback] = None,
-    ) -> None:
+    ) -> WsFrame:
         """
         Reply with template card message
 
@@ -219,6 +228,9 @@ class WSClient:
             frame: Original frame
             template_card: Template card content
             feedback: Feedback info (optional)
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -240,7 +252,7 @@ class WSClient:
                 body["feedback"] = feedback_data
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, "reply_template_card")
+        return await self._ws_manager.send(ws_frame, body, "aibot_respond_msg")
 
     async def reply_stream_with_card(
         self,
@@ -249,7 +261,7 @@ class WSClient:
         content: str,
         finish: bool = False,
         options: Optional[dict[str, Any]] = None,
-    ) -> None:
+    ) -> WsFrame:
         """
         Send streaming message + template card combined reply
 
@@ -263,6 +275,9 @@ class WSClient:
                 - stream_feedback: Stream message feedback
                 - template_card: Template card content
                 - card_feedback: Card feedback info
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -296,14 +311,14 @@ class WSClient:
             body["card_feedback"] = options["card_feedback"]
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, "reply_stream_with_card")
+        return await self._ws_manager.send(ws_frame, body, "aibot_respond_msg")
 
     async def update_template_card(
         self,
         frame: Union[WsFrame, WsFrameHeaders],
         template_card: TemplateCard,
         userids: Optional[list[str]] = None,
-    ) -> None:
+    ) -> WsFrame:
         """
         Update template card (response to template_card_event, must be called within 5s)
 
@@ -311,6 +326,9 @@ class WSClient:
             frame: Event frame (must contain event's req_id)
             template_card: Template card content (task_id must match callback's task_id)
             userids: User IDs to replace card for, empty means all users
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(frame, dict):
             headers = frame
@@ -318,6 +336,7 @@ class WSClient:
             headers = frame.headers
 
         body: dict[str, Any] = {
+            "response_type": "update_template_card",
             "template_card": self._build_template_card(template_card),
         }
 
@@ -325,19 +344,22 @@ class WSClient:
             body["userids"] = userids
 
         ws_frame = WsFrame(headers=headers)
-        await self._ws_manager.send(ws_frame, body, "update_template_card")
+        return await self._ws_manager.send(ws_frame, body, "aibot_respond_update_msg")
 
     async def send_message(
         self,
         chatid: str,
         body: Union[SendMarkdownMsgBody, SendTemplateCardMsgBody, dict[str, Any]],
-    ) -> None:
+    ) -> WsFrame:
         """
         Proactively send message (no callback frame needed)
 
         Args:
             chatid: Chat ID (user's userid for single chat, chatid for group)
             body: Message body (markdown or template_card)
+
+        Returns:
+            WsFrame: The ack frame from server
         """
         if isinstance(body, SendMarkdownMsgBody):
             msg_body = {
@@ -352,16 +374,12 @@ class WSClient:
         else:
             msg_body = body
 
-        data = {
-            "cmd": "send_message",
-            "headers": {"req_id": generate_req_id("send")},
-            "body": {
-                "chatid": chatid,
-                **msg_body,
-            },
-        }
-
-        await self._ws_manager._send_raw(data)
+        req_id = generate_req_id("aibot_send_msg")
+        return await self._ws_manager.send_reply(
+            req_id,
+            {"chatid": chatid, **msg_body},
+            "aibot_send_msg",
+        )
 
     async def download_file(
         self,

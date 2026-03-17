@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from typing import Any
+from typing import Any, Optional
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -12,6 +12,16 @@ from websockets.protocol import State
 from .types import WsFrame, WSClientOptions, CmdType
 from .message_handler import MessageHandler
 from .logger import Logger, DefaultLogger
+
+
+class _ReplyQueueItem:
+    """Reply queue item containing frame and future for ack waiting"""
+
+    __slots__ = ("frame", "future")
+
+    def __init__(self, frame: dict[str, Any], future: "asyncio.Future[WsFrame]"):
+        self.frame = frame
+        self.future = future
 
 
 class WebSocketManager:
@@ -38,10 +48,18 @@ class WebSocketManager:
         self._receive_task: asyncio.Task | None = None
         self._missed_pong_count = 0  # Consecutive missed pong count (official SDK naming)
         self._max_missed_pong = 2  # Max allowed consecutive missed pongs
-        self._reply_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._reply_tasks: dict[str, asyncio.Task] = {}
         self._stop_event = asyncio.Event()
         self._kicked_by_new_connection = False  # Flag for disconnected_event
+
+        # Serial reply queue (ported from official SDK)
+        self._reply_queues: dict[str, list[_ReplyQueueItem]] = {}
+        self._pending_acks: dict[
+            str,
+            tuple["asyncio.Future[WsFrame]", Optional[asyncio.TimerHandle]],
+        ] = {}
+        self._processing_queues: set[str] = set()  # req_ids being processed
+        self._reply_ack_timeout: float = 5.0  # seconds
+        self._max_reply_queue_size: int = 100
 
     @property
     def is_connected(self) -> bool:
@@ -144,10 +162,8 @@ class WebSocketManager:
             except asyncio.CancelledError:
                 pass
 
-        # Cancel all reply tasks
-        for task in self._reply_tasks.values():
-            task.cancel()
-        self._reply_tasks.clear()
+        # Clear pending messages and reply queues
+        self._clear_pending_messages("Connection manually closed")
 
         # Close WebSocket
         if self._ws:
@@ -228,21 +244,19 @@ class WebSocketManager:
                     self._logger.debug("No message in 5s, continuing...")
                     continue
 
-                # Log raw message
-                self._logger.info(f"RAW MESSAGE: {message}")
-
                 data = json.loads(message)
-
-                # Debug: log raw received data
                 self._logger.debug(f"Received: {data}")
 
-                # Handle generic ACK (not heartbeat related)
-                if data.get("cmd") == "ack":
-                    self._logger.debug("Generic ACK received")
+                # Try to get req_id from headers first, then from top level
+                # Note: headers might be None, so use or {} for safety
+                headers = data.get("headers") or {}
+                req_id = headers.get("req_id", "") or data.get("req_id", "")
+
+                # Check if this is a reply ack
+                if req_id and req_id in self._pending_acks:
+                    self._handle_reply_ack(req_id, data)
                     continue
 
-                # Handle auth response (no cmd, check req_id prefix)
-                req_id = data.get("headers", {}).get("req_id", "")
                 if req_id.startswith("aibot_subscribe"):
                     if data.get("errcode") == 0:
                         self._authenticated = True
@@ -300,6 +314,9 @@ class WebSocketManager:
         self._connected = False
         self._authenticated = False
 
+        # Clear pending messages before dispatching disconnected event
+        self._clear_pending_messages(f"WebSocket disconnected ({reason})")
+
         await self._message_handler.dispatch("disconnected", WsFrame(headers={"req_id": ""}, body=reason))
 
         # Don't reconnect if kicked by new connection (disconnected_event)
@@ -352,48 +369,198 @@ class WebSocketManager:
         frame: WsFrame,
         body: dict[str, Any],
         cmd: str = CmdType.REPLY,
-    ) -> None:
+    ) -> WsFrame:
         """
-        Send reply message through WebSocket
+        Send reply message through WebSocket with serial queue
+
+        Messages with the same req_id are queued and sent serially,
+        waiting for server ack before sending the next one.
 
         Args:
             frame: Original frame (for req_id)
             body: Message body
             cmd: Command type
-        """
-        data = {
-            "cmd": cmd,
-            "headers": {"req_id": frame.headers["req_id"]},
-            "body": body,
-        }
-        await self._send_raw(data)
 
-    async def send_serialized(self, req_id: str, data: dict[str, Any]) -> None:
+        Returns:
+            WsFrame: The ack frame from server
         """
-        Send message with serialized queue (wait for ack before next)
+        req_id = frame.headers["req_id"]
+        return await self.send_reply(req_id, body, cmd)
+
+    async def send_reply(
+        self,
+        req_id: str,
+        body: dict[str, Any],
+        cmd: str = CmdType.REPLY,
+    ) -> WsFrame:
+        """
+        Send reply message through WebSocket (serial queue version)
+
+        Messages with the same req_id are queued and sent serially.
 
         Args:
-            req_id: Request ID for queue grouping
-            data: Data to send
-        """
-        # If there's already a task for this req_id, wait for it
-        if req_id in self._reply_tasks:
-            try:
-                await self._reply_tasks[req_id]
-            except Exception:
-                pass
+            req_id: The req_id from callback frame
+            body: Reply message body
+            cmd: Command type, defaults to CmdType.REPLY
 
-        # Create new task
-        task = asyncio.create_task(self._send_and_wait_ack(data))
-        self._reply_tasks[req_id] = task
+        Returns:
+            WsFrame: The ack frame from server
+        """
+        loop = asyncio.get_event_loop()
+        future: "asyncio.Future[WsFrame]" = loop.create_future()
+
+        frame: dict[str, Any] = {
+            "cmd": cmd,
+            "headers": {"req_id": req_id},
+            "body": body,
+        }
+
+        item = _ReplyQueueItem(frame, future)
+
+        if req_id not in self._reply_queues:
+            self._reply_queues[req_id] = []
+
+        queue = self._reply_queues[req_id]
+
+        # Prevent queue from growing indefinitely
+        if len(queue) >= self._max_reply_queue_size:
+            self._logger.warn(
+                f"Reply queue for req_id {req_id} exceeds max size ({self._max_reply_queue_size}), "
+                "rejecting new message"
+            )
+            future.set_exception(
+                RuntimeError(
+                    f"Reply queue for req_id {req_id} exceeds max size ({self._max_reply_queue_size})"
+                )
+            )
+            return await future
+
+        queue.append(item)
+
+        # If this is the only item in queue, start processing
+        if len(queue) == 1 and req_id not in self._processing_queues:
+            asyncio.ensure_future(self._process_reply_queue(req_id))
+
+        return await future
+
+    async def _process_reply_queue(self, req_id: str) -> None:
+        """Process reply queue for a specific req_id"""
+        self._processing_queues.add(req_id)
 
         try:
-            await task
-        finally:
-            self._reply_tasks.pop(req_id, None)
+            while True:
+                queue = self._reply_queues.get(req_id)
+                if not queue:
+                    self._reply_queues.pop(req_id, None)
+                    break
 
-    async def _send_and_wait_ack(self, data: dict[str, Any]) -> None:
-        """Send data and wait for ack"""
-        await self._send_raw(data)
-        # Note: In real implementation, we would wait for specific ack
-        # For now, just send without waiting
+                item = queue[0]
+
+                # Send message first (official SDK behavior)
+                try:
+                    await self._send_raw(item.frame)
+                    self._logger.debug(
+                        f"Reply message sent via WebSocket, req_id: {req_id}, queue length: {len(queue)}"
+                    )
+                except Exception as e:
+                    self._logger.error(f"Failed to send reply for req_id {req_id}: {e}")
+                    queue.pop(0)
+                    if not item.future.done():
+                        item.future.set_exception(e)
+                    continue
+
+                # Wait for ack (set pending_acks AFTER sending - official SDK behavior)
+                loop = asyncio.get_event_loop()
+                ack_future: "asyncio.Future[WsFrame]" = loop.create_future()
+
+                # Set timeout
+                timeout_handle = loop.call_later(
+                    self._reply_ack_timeout,
+                    self._on_reply_ack_timeout,
+                    req_id,
+                    ack_future,
+                )
+
+                self._pending_acks[req_id] = (ack_future, timeout_handle)
+
+                try:
+                    ack_frame = await ack_future
+                    # Successfully received ack
+                    queue.pop(0)
+                    if not item.future.done():
+                        item.future.set_result(ack_frame)
+                except Exception as e:
+                    queue.pop(0)
+                    if not item.future.done():
+                        item.future.set_exception(e)
+        finally:
+            self._processing_queues.discard(req_id)
+
+    def _on_reply_ack_timeout(
+        self, req_id: str, ack_future: "asyncio.Future[WsFrame]"
+    ) -> None:
+        """Reply ack timeout callback"""
+        self._logger.warn(
+            f"Reply ack timeout ({self._reply_ack_timeout}s) for req_id: {req_id}"
+        )
+        self._pending_acks.pop(req_id, None)
+        if not ack_future.done():
+            ack_future.set_exception(
+                TimeoutError(
+                    f"Reply ack timeout ({self._reply_ack_timeout}s) for req_id: {req_id}"
+                )
+            )
+
+    def _handle_reply_ack(self, req_id: str, frame: dict[str, Any]) -> None:
+        """Handle reply message ack"""
+        pending = self._pending_acks.pop(req_id, None)
+        if not pending:
+            return
+
+        ack_future, timeout_handle = pending
+
+        # Cancel timeout
+        if timeout_handle:
+            timeout_handle.cancel()
+
+        errcode = frame.get("errcode")
+        if errcode != 0:
+            self._logger.warn(
+                f"Reply ack error: req_id={req_id}, errcode={errcode}, errmsg={frame.get('errmsg')}"
+            )
+            if not ack_future.done():
+                ack_future.set_exception(
+                    RuntimeError(
+                        f"Reply ack error: errcode={errcode}, errmsg={frame.get('errmsg')}"
+                    )
+                )
+        else:
+            self._logger.debug(f"Reply ack received for req_id: {req_id}")
+            if not ack_future.done():
+                # Convert dict to WsFrame
+                ws_frame = WsFrame(
+                    cmd=frame.get("cmd"),
+                    headers=frame.get("headers", {}),
+                    body=frame.get("body"),
+                    errcode=frame.get("errcode"),
+                    errmsg=frame.get("errmsg"),
+                )
+                ack_future.set_result(ws_frame)
+
+    def _clear_pending_messages(self, reason: str) -> None:
+        """Clear all pending messages and acks"""
+        for req_id, (ack_future, timeout_handle) in self._pending_acks.items():
+            if timeout_handle:
+                timeout_handle.cancel()
+            if not ack_future.done():
+                ack_future.set_exception(RuntimeError(reason))
+        self._pending_acks.clear()
+
+        for req_id, queue in self._reply_queues.items():
+            for item in queue:
+                if not item.future.done():
+                    item.future.set_exception(
+                        RuntimeError(f"{reason}, reply for req_id: {req_id} cancelled")
+                    )
+        self._reply_queues.clear()
+        self._processing_queues.clear()

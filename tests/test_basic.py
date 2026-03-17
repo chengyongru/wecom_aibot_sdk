@@ -165,6 +165,9 @@ class TestMessageHandler:
         frame = WsFrame(headers={"req_id": "test"}, body={"msgtype": "text"})
         await handler.dispatch("message", frame)
 
+        # Wait for async task to complete
+        await asyncio.sleep(0.1)
+
         assert len(received) == 1
         assert received[0] == frame
 
@@ -185,6 +188,9 @@ class TestMessageHandler:
             body={"msgtype": "text", "text": {"content": "hello"}}
         )
         await handler.handle_frame(frame)
+
+        # Wait for async task to complete
+        await asyncio.sleep(0.1)
 
         assert len(received) == 1
 
@@ -214,6 +220,9 @@ class TestEventTypeCompatibility:
         )
         await handler.handle_frame(frame)
 
+        # Wait for async task to complete
+        await asyncio.sleep(0.1)
+
         assert len(received) == 1
 
     @pytest.mark.asyncio
@@ -238,6 +247,9 @@ class TestEventTypeCompatibility:
         )
         await handler.handle_frame(frame)
 
+        # Wait for async task to complete
+        await asyncio.sleep(0.1)
+
         assert len(received) == 1
 
     @pytest.mark.asyncio
@@ -261,6 +273,9 @@ class TestEventTypeCompatibility:
             }
         )
         await handler.handle_frame(frame)
+
+        # Wait for async task to complete
+        await asyncio.sleep(0.1)
 
         assert len(received) == 1
 

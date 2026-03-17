@@ -1,5 +1,6 @@
 """Message parsing and event dispatching"""
 
+import asyncio
 from typing import Any, Callable, Awaitable
 
 from .types import WsFrame, MessageType, EventType
@@ -33,22 +34,36 @@ class MessageHandler:
             self._event_handlers[event] = [h for h in self._event_handlers[event] if h != handler]
 
     async def dispatch(self, event: str, frame: WsFrame) -> None:
-        """Dispatch event to handlers"""
+        """
+        Dispatch event to handlers (non-blocking)
+
+        Handlers are executed in separate tasks to avoid blocking the receive loop.
+        This allows handlers to await reply methods while the receive loop continues
+        to process incoming ack frames.
+        """
         handlers = self._event_handlers.get(event, [])
         for handler in handlers:
             try:
-                await handler(frame)
+                # Use create_task to avoid blocking the receive loop
+                asyncio.create_task(self._run_handler(handler, event, frame))
             except Exception as e:
-                self._logger.error(f"Error in handler for event '{event}': {e}")
+                self._logger.error(f"Error creating task for event '{event}': {e}")
 
         # Also dispatch to wildcard handlers
         if event != "*":
             wildcard_handlers = self._event_handlers.get("*", [])
             for handler in wildcard_handlers:
                 try:
-                    await handler(frame)
+                    asyncio.create_task(self._run_handler(handler, "*", frame))
                 except Exception as e:
-                    self._logger.error(f"Error in wildcard handler: {e}")
+                    self._logger.error(f"Error creating wildcard handler task: {e}")
+
+    async def _run_handler(self, handler: EventHandler, event: str, frame: WsFrame) -> None:
+        """Run a single handler with error handling"""
+        try:
+            await handler(frame)
+        except Exception as e:
+            self._logger.error(f"Error in handler for event '{event}': {e}")
 
     def parse_frame(self, data: dict[str, Any]) -> WsFrame:
         """Parse raw WebSocket data into WsFrame"""
