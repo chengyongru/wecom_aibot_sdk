@@ -36,3 +36,6 @@ class CmdType(str):
     REPLY_TEMPLATE_CARD = "reply_template_card"
     UPDATE_TEMPLATE_CARD = "update_template_card"
     SEND_MESSAGE = "send_message"
+    UPLOAD_MEDIA_INIT = "aibot_upload_media_init"
+    UPLOAD_MEDIA_CHUNK = "aibot_upload_media_chunk"
+    UPLOAD_MEDIA_FINISH = "aibot_upload_media_finish"

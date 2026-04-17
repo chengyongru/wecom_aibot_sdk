@@ -6,6 +6,9 @@ streaming replies, template cards, and file download/decryption.
 """
 
 import asyncio
+import base64
+import hashlib
+from pathlib import Path
 from typing import Any, Optional, Union
 
 from .types import (
@@ -19,7 +22,9 @@ from .types import (
     ReplyMsgItem,
     SendMarkdownMsgBody,
     SendTemplateCardMsgBody,
+    UploadResult,
 )
+from .types.api import CmdType
 from .types.config import WSClientOptions as ConfigOptions
 from .types.message import CardTitle, CardAction, CardButton
 from .ws import WebSocketManager
@@ -27,6 +32,7 @@ from .message_handler import MessageHandler, EventHandler
 from .api import WeComApiClient
 from .logger import Logger, DefaultLogger
 from .utils import generate_req_id
+from .upload import _read_and_validate, _chunk_data, WECOM_UPLOAD_CHUNK_SIZE
 
 
 class WSClient:
@@ -403,6 +409,139 @@ class WSClient:
             Tuple of (buffer, filename)
         """
         return await self._api_client.download_file(url, aes_key)
+
+    async def upload_media(self, file_path: str) -> UploadResult:
+        """
+        Upload a media file using the 3-step WeCom WebSocket protocol.
+
+        Args:
+            file_path: Local path to the file to upload.
+
+        Returns:
+            UploadResult with media_id and media_type.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            ValueError: If the file exceeds 200MB.
+            RuntimeError: If any upload step fails.
+        """
+        # Step 0: validate and read file in a single thread call
+        name, media_type, size, data = await asyncio.to_thread(
+            _read_and_validate, file_path
+        )
+        md5 = hashlib.md5(data).hexdigest()
+        chunks = _chunk_data(data, WECOM_UPLOAD_CHUNK_SIZE)
+
+        # Step 1: init
+        init_body: dict[str, Any] = {
+            "filename": name,
+            "media_type": media_type,
+            "filesize": size,
+            "md5": md5,
+        }
+        init_req = generate_req_id("upload_init")
+        init_ack = await self._ws_manager.send_reply(
+            init_req, init_body, CmdType.UPLOAD_MEDIA_INIT
+        )
+        if init_ack.errcode != 0:
+            raise RuntimeError(
+                f"upload_init failed: errcode={init_ack.errcode}, "
+                f"errmsg={init_ack.errmsg}"
+            )
+        upload_id = init_ack.body.get("upload_id", "")
+        if not upload_id:
+            raise RuntimeError(
+                "upload_init succeeded but returned no upload_id"
+            )
+
+        # Step 2: chunks
+        total_chunks = len(chunks)
+        for idx, chunk in enumerate(chunks):
+            chunk_body: dict[str, Any] = {
+                "upload_id": upload_id,
+                "chunk_index": idx,
+                "total_chunks": total_chunks,
+                "base64_data": base64.b64encode(chunk).decode(),
+            }
+            chunk_req = generate_req_id("upload_chunk")
+            chunk_ack = await self._ws_manager.send_reply(
+                chunk_req, chunk_body, CmdType.UPLOAD_MEDIA_CHUNK
+            )
+            if chunk_ack.errcode != 0:
+                raise RuntimeError(
+                    f"upload_chunk {idx}/{total_chunks} failed: "
+                    f"errcode={chunk_ack.errcode}, errmsg={chunk_ack.errmsg}"
+                )
+
+        # Step 3: finish
+        finish_body: dict[str, Any] = {
+            "upload_id": upload_id,
+            "filename": name,
+            "media_type": media_type,
+        }
+        finish_req = generate_req_id("upload_finish")
+        finish_ack = await self._ws_manager.send_reply(
+            finish_req, finish_body, CmdType.UPLOAD_MEDIA_FINISH
+        )
+        if finish_ack.errcode != 0:
+            raise RuntimeError(
+                f"upload_finish failed: errcode={finish_ack.errcode}, "
+                f"errmsg={finish_ack.errmsg}"
+            )
+        media_id = finish_ack.body.get("media_id", "")
+        if not media_id:
+            raise RuntimeError(
+                "upload_finish succeeded but returned no media_id"
+            )
+
+        return UploadResult(media_id=media_id, media_type=media_type)
+
+    async def reply_media(
+        self,
+        frame: Union[WsFrame, WsFrameHeaders],
+        file_path: str,
+    ) -> WsFrame:
+        """
+        Upload a file and reply with it as media.
+
+        Args:
+            frame: Original frame to reply to.
+            file_path: Local path to the file.
+
+        Returns:
+            WsFrame ack from server.
+        """
+        result = await self.upload_media(file_path)
+        body: dict[str, Any] = {
+            "msgtype": result.media_type,
+            result.media_type: {"media_id": result.media_id},
+        }
+        return await self.reply(frame, body)
+
+    async def send_media_message(
+        self,
+        chatid: str,
+        file_path: str,
+    ) -> WsFrame:
+        """
+        Upload a file and proactively send it as media.
+
+        Args:
+            chatid: Chat ID or user ID.
+            file_path: Local path to the file.
+
+        Returns:
+            WsFrame ack from server.
+        """
+        result = await self.upload_media(file_path)
+        body: dict[str, Any] = {
+            "msgtype": result.media_type,
+            result.media_type: {"media_id": result.media_id},
+        }
+        req_id = generate_req_id("aibot_send_msg")
+        return await self._ws_manager.send_reply(
+            req_id, {"chatid": chatid, **body}, "aibot_send_msg"
+        )
 
     def _build_template_card(self, card: TemplateCard) -> dict[str, Any]:
         """Build template card dict from TemplateCard object"""

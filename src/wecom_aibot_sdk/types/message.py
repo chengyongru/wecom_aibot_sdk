@@ -187,3 +187,20 @@ class SendTemplateCardMsgBody:
 
     msgtype: str = "template_card"
     template_card: dict[str, Any] = field(default_factory=dict)
+
+
+class MediaType(str, Enum):
+    """WeCom media type enumeration"""
+
+    IMAGE = "image"
+    VIDEO = "video"
+    VOICE = "voice"
+    FILE = "file"
+
+
+@dataclass
+class UploadResult:
+    """Result of a media upload operation"""
+
+    media_id: str
+    media_type: str

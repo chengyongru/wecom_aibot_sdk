@@ -15,6 +15,8 @@ from .types import (
     TemplateCard,
     ReplyFeedback,
     ReplyMsgItem,
+    MediaType,
+    UploadResult,
 )
 from .utils import generate_req_id
 from .logger import DefaultLogger
@@ -31,6 +33,8 @@ __all__ = [
     "TemplateCard",
     "ReplyFeedback",
     "ReplyMsgItem",
+    "MediaType",
+    "UploadResult",
     "generate_req_id",
     "DefaultLogger",
 ]
