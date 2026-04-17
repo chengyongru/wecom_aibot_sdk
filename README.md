@@ -94,19 +94,26 @@ client = WSClient({
 })
 ```
 
+#### 属性
+
+| 属性 | 描述 |
+|------|------|
+| `is_connected` | WebSocket 是否已连接 |
+| `is_authenticated` | 是否已完成认证（v0.1.6+） |
+
 #### 方法
 
 | 方法 | 描述 | 返回值 |
 |------|------|--------|
 | `connect_async()` | 建立 WebSocket 连接 | `None` |
 | `disconnect()` | 断开连接 | `None` |
-| `reply(frame, body, cmd?)` | 发送回复消息（通用） | `None` |
-| `reply_stream(frame, stream_id, content, finish?, msg_item?, feedback?)` | 发送流式回复 | `None` |
-| `reply_welcome(frame, body)` | 发送欢迎回复（事件后 5 秒内） | `None` |
-| `reply_template_card(frame, template_card, feedback?)` | 回复模板卡片 | `None` |
-| `reply_stream_with_card(frame, stream_id, content, finish?, options?)` | 发送流式 + 卡片组合 | `None` |
-| `update_template_card(frame, template_card, userids?)` | 更新模板卡片（5 秒内） | `None` |
-| `send_message(chatid, body)` | 主动发送消息 | `None` |
+| `reply(frame, body, cmd?)` | 发送回复消息（通用） | `WsFrame` |
+| `reply_stream(frame, stream_id, content, finish?, msg_item?, feedback?)` | 发送流式回复 | `WsFrame` |
+| `reply_welcome(frame, body)` | 发送欢迎回复（事件后 5 秒内） | `WsFrame` |
+| `reply_template_card(frame, template_card, feedback?)` | 回复模板卡片 | `WsFrame` |
+| `reply_stream_with_card(frame, stream_id, content, finish?, options?)` | 发送流式 + 卡片组合 | `WsFrame` |
+| `update_template_card(frame, template_card, userids?)` | 更新模板卡片（5 秒内） | `WsFrame` |
+| `send_message(chatid, body)` | 主动发送消息 | `WsFrame` |
 | `download_file(url, aes_key?)` | 下载并可选解密文件 | `tuple[bytes, str?]` |
 
 #### 事件
