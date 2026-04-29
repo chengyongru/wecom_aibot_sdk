@@ -5,7 +5,7 @@
 
 [简体中文](../README.md)
 
-Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, providing message sending/receiving, streaming replies, template cards, event callbacks, file download/decryption and other core capabilities.
+Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, providing message sending/receiving, streaming replies, template cards, event callbacks, file download/decryption, media file upload and other core capabilities.
 
 ## Features
 
@@ -20,6 +20,7 @@ Enterprise WeChat AI Bot Python SDK - Based on WebSocket long connection, provid
 - **Event Callbacks** - Supports enter_chat, template_card_event, feedback_event
 - **Serial Reply Queue** - Replies with same req_id are sent serially, auto-waits for receipt
 - **File Download & Decryption** - Built-in AES-256-CBC file decryption, supports RFC 5987 filename encoding
+- **Media File Upload** - Upload images/videos/voice/files via WebSocket 3-step protocol (init → chunk × N → finish)
 - **Pluggable Logging** - Uses Python's built-in `logging` module, defaults to WARNING level
 
 ## Installation
@@ -107,6 +108,9 @@ client = WSClient({
 | `update_template_card(frame, template_card, userids?)` | Update template card (within 5s) | `None` |
 | `send_message(chatid, body)` | Proactively send message | `None` |
 | `download_file(url, aes_key?)` | Download and optionally decrypt file | `tuple[bytes, str?]` |
+| `upload_media(file_path)` | Upload media file (3-step WebSocket protocol) | `UploadResult` |
+| `reply_media(frame, file_path)` | Upload file and reply with it as media | `WsFrame` |
+| `send_media_message(chatid, file_path)` | Upload file and proactively send media to chat | `WsFrame` |
 
 #### Events
 
@@ -127,6 +131,46 @@ client = WSClient({
 | `event.enter_chat` | `(frame)` | User entered chat |
 | `event.template_card_event` | `(frame)` | Card button clicked |
 | `event.feedback_event` | `(frame)` | User feedback |
+
+## File Upload
+
+Upload local media files (images, videos, voice, files) via the WebSocket 3-step protocol, then use the returned `media_id` to reply or send proactively:
+
+```python
+import asyncio
+from wecom_aibot_sdk import WSClient
+
+async def main():
+    client = WSClient({
+        "bot_id": "your-bot-id",
+        "secret": "your-bot-secret",
+    })
+
+    # On text message, upload and reply with an image
+    async def on_text(frame):
+        result = await client.upload_media("/path/to/image.png")
+        print(f"Upload success: media_id={result.media_id}, type={result.media_type}")
+
+        # Reply as media message
+        await client.reply_media(frame, "/path/to/image.png")
+
+    client.on("message.text", on_text)
+
+    # Proactively send a file to a user
+    async def send_file():
+        await client.send_media_message("userid", "/path/to/document.pdf")
+
+    await client.connect_async()
+    while client.is_connected:
+        await asyncio.sleep(1)
+
+asyncio.run(main())
+```
+
+**Notes:**
+- Maximum single file size is **200MB**
+- Media type is auto-detected from file extension: `image` / `video` / `voice` / `file`
+- Upload uses chunked transfer (512KB per chunk) for stable large file uploads
 
 ## File Download
 
@@ -223,6 +267,7 @@ wecom_aibot_sdk/
 ├── ws.py                # WebSocket connection manager
 ├── message_handler.py   # Message parsing and event dispatch
 ├── api.py               # HTTP API client (file download)
+├── upload.py            # Media file upload helpers (chunking, type detection)
 ├── crypto.py            # AES-256-CBC file decryption
 ├── logger.py            # Default logger implementation
 ├── utils.py             # Utility functions (generate_req_id, etc.)

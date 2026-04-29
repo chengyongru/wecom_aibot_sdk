@@ -5,7 +5,7 @@
 
 [English](./docs/README_en.md)
 
-基于 WebSocket 长连接通道，提供消息收发、流式回复、模板卡片、事件回调、文件下载解密等核心能力。
+基于 WebSocket 长连接通道，提供消息收发、流式回复、模板卡片、事件回调、文件下载解密、媒体文件上传等核心能力。
 
 ## 安装
 
@@ -26,6 +26,7 @@ pip install wecom-aibot-sdk-python
 - **事件回调** - 支持 enter_chat、template_card_event、feedback_event
 - **串行回复队列** - 相同 req_id 的回复串行发送，自动等待回执
 - **文件下载解密** - 内置 AES-256-CBC 文件解密，支持 RFC 5987 文件名编码
+- **媒体文件上传** - 支持通过 WebSocket 3 步协议上传图片/视频/语音/文件（init → chunk × N → finish）
 - **可插拔日志** - 使用 Python 内置 `logging` 模块，默认 WARNING 级别
 
 
@@ -115,6 +116,9 @@ client = WSClient({
 | `update_template_card(frame, template_card, userids?)` | 更新模板卡片（5 秒内） | `WsFrame` |
 | `send_message(chatid, body)` | 主动发送消息 | `WsFrame` |
 | `download_file(url, aes_key?)` | 下载并可选解密文件 | `tuple[bytes, str?]` |
+| `upload_media(file_path)` | 上传媒体文件（3 步 WebSocket 协议） | `UploadResult` |
+| `reply_media(frame, file_path)` | 上传文件并作为媒体消息回复 | `WsFrame` |
+| `send_media_message(chatid, file_path)` | 上传文件并主动向指定会话发送媒体消息 | `WsFrame` |
 
 #### 事件
 
@@ -136,6 +140,46 @@ client = WSClient({
 | `event.template_card_event` | `(frame)` | 卡片按钮点击 |
 | `event.feedback_event` | `(frame)` | 用户反馈 |
 | `event.disconnected_event` | `(frame)` | 被新连接踢出（不会自动重连） |
+
+## 文件上传
+
+通过 WebSocket 3 步协议上传本地媒体文件（图片、视频、语音、文件），获取 `media_id` 后用于回复或主动发送：
+
+```python
+import asyncio
+from wecom_aibot_sdk import WSClient
+
+async def main():
+    client = WSClient({
+        "bot_id": "your-bot-id",
+        "secret": "your-bot-secret",
+    })
+
+    # 收到文本消息后，上传并回复图片
+    async def on_text(frame):
+        result = await client.upload_media("/path/to/image.png")
+        print(f"上传成功: media_id={result.media_id}, type={result.media_type}")
+
+        # 作为媒体消息回复
+        await client.reply_media(frame, "/path/to/image.png")
+
+    client.on("message.text", on_text)
+
+    # 主动向指定用户发送文件
+    async def send_file():
+        await client.send_media_message("userid", "/path/to/document.pdf")
+
+    await client.connect_async()
+    while client.is_connected:
+        await asyncio.sleep(1)
+
+asyncio.run(main())
+```
+
+**注意事项：**
+- 单个文件大小不能超过 **200MB**
+- 支持的媒体类型会根据文件扩展名自动推断：`image` / `video` / `voice` / `file`
+- 上传过程使用分片传输（每片 512KB），大文件也能稳定上传
 
 ## 文件下载
 
@@ -232,6 +276,7 @@ wecom_aibot_sdk/
 ├── ws.py                # WebSocket 连接管理器
 ├── message_handler.py   # 消息解析和事件分发
 ├── api.py               # HTTP API 客户端（文件下载）
+├── upload.py            # 媒体文件上传辅助（分片、类型推断）
 ├── crypto.py            # AES-256-CBC 文件解密
 ├── logger.py            # 默认日志实现
 ├── utils.py             # 工具函数（generate_req_id 等）
