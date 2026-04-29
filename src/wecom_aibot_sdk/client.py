@@ -433,10 +433,12 @@ class WSClient:
         chunks = _chunk_data(data, WECOM_UPLOAD_CHUNK_SIZE)
 
         # Step 1: init
+        total_chunks = len(chunks)
         init_body: dict[str, Any] = {
             "filename": name,
-            "media_type": media_type,
-            "filesize": size,
+            "type": media_type,
+            "total_size": size,
+            "total_chunks": total_chunks,
             "md5": md5,
         }
         init_req = generate_req_id("upload_init")
@@ -455,7 +457,6 @@ class WSClient:
             )
 
         # Step 2: chunks
-        total_chunks = len(chunks)
         for idx, chunk in enumerate(chunks):
             chunk_body: dict[str, Any] = {
                 "upload_id": upload_id,
